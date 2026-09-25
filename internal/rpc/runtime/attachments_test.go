@@ -5,12 +5,15 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // compatibility digest required by the Weixin upload protocol
 	"encoding/hex"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -26,6 +29,7 @@ type attachmentFixture struct {
 	contentHash string
 	data        []byte
 	asset       media.Asset
+	ingestErr   error
 }
 
 func (f *attachmentFixture) Resolve(_ context.Context, botID, contentHash string) (media.Asset, error) {
@@ -38,6 +42,9 @@ func (f *attachmentFixture) Resolve(_ context.Context, botID, contentHash string
 func (f *attachmentFixture) IngestContainerFile(_ context.Context, botID, containerPath string) (media.Asset, error) {
 	if botID != f.botID || containerPath != f.container {
 		return media.Asset{}, media.ErrAssetNotFound
+	}
+	if f.ingestErr != nil {
+		return media.Asset{}, f.ingestErr
 	}
 	return f.asset, nil
 }
@@ -114,6 +121,30 @@ func TestResolveAttachmentRejectsInvalidSourcesAndPaths(t *testing.T) {
 				t.Fatalf("status = %v, want InvalidArgument", status.Code(err))
 			}
 		})
+	}
+}
+
+func TestResolveAttachmentLogsWorkspaceIngestFailureWithoutPath(t *testing.T) {
+	fixture := newAttachmentFixture([]byte("payload"))
+	fixture.ingestErr = errors.New("open /data/report.txt: permission denied")
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	srv := NewServer(logger, nil, fixture)
+
+	_, err := srv.ResolveAttachment(context.Background(), &runtimepb.ResolveAttachmentRequest{
+		BotId: fixture.botID, ContainerPath: fixture.container,
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("status = %v, want Internal", status.Code(err))
+	}
+	logText := logs.String()
+	for _, want := range []string{"stage=ingest_workspace_file", "source_kind=workspace_path", "permission denied"} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("log %q does not contain %q", logText, want)
+		}
+	}
+	if strings.Contains(logText, fixture.container) {
+		t.Fatalf("log contains workspace path %q: %s", fixture.container, logText)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -34,12 +35,14 @@ func (s *Server) ResolveAttachment(ctx context.Context, req *runtimepb.ResolveAt
 		asset media.Asset
 		err   error
 	)
+	sourceKind := "content_hash"
 	if contentHash != "" {
 		if !validContentHash(contentHash) {
 			return nil, status.Error(codes.InvalidArgument, "invalid attachment content hash")
 		}
 		asset, err = s.attachments.Resolve(ctx, botID, contentHash)
 	} else {
+		sourceKind = "workspace_path"
 		cleanPath := filepath.Clean(containerPath)
 		subpath, ok := attachment.DataSubpath(cleanPath)
 		if !ok || strings.Contains(subpath, "..") {
@@ -48,7 +51,11 @@ func (s *Server) ResolveAttachment(ctx context.Context, req *runtimepb.ResolveAt
 		asset, err = s.attachments.IngestContainerFile(ctx, botID, cleanPath)
 	}
 	if err != nil {
-		return nil, attachmentStatus(err)
+		stage := "resolve_asset"
+		if sourceKind == "workspace_path" {
+			stage = "ingest_workspace_file"
+		}
+		return nil, s.attachmentFailure(ctx, "resolve", stage, sourceKind, botID, 0, err, containerPath, contentHash)
 	}
 	if asset.SizeBytes > media.MaxAssetBytes {
 		return nil, status.Error(codes.ResourceExhausted, "attachment exceeds the maximum size")
@@ -56,17 +63,17 @@ func (s *Server) ResolveAttachment(ctx context.Context, req *runtimepb.ResolveAt
 
 	reader, _, err := s.attachments.Open(ctx, botID, asset.ContentHash)
 	if err != nil {
-		return nil, attachmentStatus(err)
+		return nil, s.attachmentFailure(ctx, "resolve", "open_ingested_asset", sourceKind, botID, 0, err, containerPath, contentHash, asset.ContentHash)
 	}
 	md5Hash := md5.New()
 	limited := &io.LimitedReader{R: reader, N: media.MaxAssetBytes + 1}
 	size, copyErr := io.Copy(md5Hash, limited)
 	closeErr := reader.Close()
 	if copyErr != nil {
-		return nil, attachmentStatus(copyErr)
+		return nil, s.attachmentFailure(ctx, "resolve", "compute_raw_md5", sourceKind, botID, size, copyErr, containerPath, contentHash, asset.ContentHash)
 	}
 	if closeErr != nil {
-		return nil, status.Error(codes.Internal, "failed to close attachment source")
+		return nil, s.attachmentFailure(ctx, "resolve", "close_ingested_asset", sourceKind, botID, size, closeErr, containerPath, contentHash, asset.ContentHash)
 	}
 	if size == 0 {
 		return nil, status.Error(codes.InvalidArgument, "attachment is empty")
@@ -93,20 +100,27 @@ func (s *Server) ReadAttachment(req *runtimepb.ReadAttachmentRequest, stream run
 	}
 	reader, _, err := s.attachments.Open(stream.Context(), botID, contentHash)
 	if err != nil {
-		return attachmentStatus(err)
+		return s.attachmentFailure(stream.Context(), "read", "open_asset", "content_hash", botID, 0, err, contentHash)
 	}
-	defer func() { _ = reader.Close() }()
+	var sent int64
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			s.logAttachmentFailure(stream.Context(), "read", "close_asset", "content_hash", botID, sent, closeErr, contentHash)
+		}
+	}()
 
 	buffer := make([]byte, attachmentChunkSize)
-	var sent int64
 	for {
 		n, readErr := reader.Read(buffer)
 		if n > 0 {
 			if sent+int64(n) > media.MaxAssetBytes {
-				return status.Error(codes.ResourceExhausted, "attachment exceeds the maximum size")
+				err := status.Error(codes.ResourceExhausted, "attachment exceeds the maximum size")
+				s.logAttachmentFailure(stream.Context(), "read", "enforce_size_limit", "content_hash", botID, sent, err, contentHash)
+				return err
 			}
 			chunk := append([]byte(nil), buffer[:n]...)
 			if err := stream.Send(&runtimepb.AttachmentChunk{Data: chunk}); err != nil {
+				s.logAttachmentFailure(stream.Context(), "read", "send_chunk", "content_hash", botID, sent, err, contentHash)
 				return err
 			}
 			sent += int64(n)
@@ -115,9 +129,31 @@ func (s *Server) ReadAttachment(req *runtimepb.ReadAttachmentRequest, stream run
 			if errors.Is(readErr, io.EOF) {
 				return nil
 			}
-			return attachmentStatus(readErr)
+			return s.attachmentFailure(stream.Context(), "read", "read_chunk", "content_hash", botID, sent, readErr, contentHash)
 		}
 	}
+}
+
+func (s *Server) attachmentFailure(ctx context.Context, operation, stage, sourceKind, botID string, bytesProcessed int64, err error, redact ...string) error {
+	s.logAttachmentFailure(ctx, operation, stage, sourceKind, botID, bytesProcessed, err, redact...)
+	return attachmentStatus(err)
+}
+
+func (s *Server) logAttachmentFailure(ctx context.Context, operation, stage, sourceKind, botID string, bytesProcessed int64, err error, redact ...string) {
+	errorText := err.Error()
+	for _, value := range redact {
+		if value != "" {
+			errorText = strings.ReplaceAll(errorText, value, "[redacted]")
+		}
+	}
+	s.logger.ErrorContext(ctx, "attachment operation failed",
+		slog.String("operation", operation),
+		slog.String("stage", stage),
+		slog.String("source_kind", sourceKind),
+		slog.String("bot_id", botID),
+		slog.Int64("bytes_processed", bytesProcessed),
+		slog.String("error", errorText),
+	)
 }
 
 func validContentHash(contentHash string) bool {
