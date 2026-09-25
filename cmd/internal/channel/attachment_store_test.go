@@ -107,3 +107,12 @@ func TestOutboundAttachmentStoreReadsRemoteWorkspaceWithoutSharedMedia(t *testin
 		t.Fatal("remote attachment unexpectedly appeared in local media store")
 	}
 }
+
+func TestLocalAttachmentStoreDoesNotRouteWorkspaceReadsRemotely(t *testing.T) {
+	store := provideLocalChannelAttachmentStore(localAttachmentStoreParams{
+		Local: media.NewService(nil, localfs.New(t.TempDir())),
+	})
+	if store.remote != nil {
+		t.Fatal("server-local attachment store must not route workspace reads to the channel process")
+	}
+}

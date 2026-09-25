@@ -4,7 +4,6 @@
 package weixin
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec
 	"crypto/rand"
@@ -53,11 +52,6 @@ func sendImageFromReader(ctx context.Context, client *Client, cfg adapterConfig,
 // sendFileFromReader uploads a file and sends it.
 func sendFileFromReader(ctx context.Context, client *Client, cfg adapterConfig, target, contextToken, text, fileName string, r io.Reader, size int64, rawMD5 string, logger *slog.Logger) error {
 	return sendMediaFromReader(ctx, client, cfg, target, contextToken, text, fileName, r, size, rawMD5, UploadMediaFile, ItemTypeFile, logger)
-}
-
-func sendMediaBytes(ctx context.Context, client *Client, cfg adapterConfig, target, contextToken, text string, data []byte, uploadType, itemType int, logger *slog.Logger) error {
-	rawMD5 := md5.Sum(data) //nolint:gosec // compatibility digest required by the Weixin upload protocol
-	return sendMediaFromReader(ctx, client, cfg, target, contextToken, text, "", bytes.NewReader(data), int64(len(data)), hex.EncodeToString(rawMD5[:]), uploadType, itemType, logger)
 }
 
 func sendMediaFromReader(ctx context.Context, client *Client, cfg adapterConfig, target, contextToken, text, fileName string, plaintext io.Reader, rawSize int64, rawMD5Hex string, uploadType, itemType int, logger *slog.Logger) error {
@@ -177,11 +171,6 @@ func sendMediaFromReader(ctx context.Context, client *Client, cfg adapterConfig,
 		}
 	}
 	return nil
-}
-
-func sendMediaBytesAsFile(ctx context.Context, client *Client, cfg adapterConfig, target, contextToken, text, fileName string, data []byte, logger *slog.Logger) error {
-	rawMD5 := md5.Sum(data) //nolint:gosec
-	return sendMediaFromReader(ctx, client, cfg, target, contextToken, text, fileName, bytes.NewReader(data), int64(len(data)), hex.EncodeToString(rawMD5[:]), UploadMediaFile, ItemTypeFile, logger)
 }
 
 // encodeAESKeyForSend base64-encodes the hex representation of a raw AES key,

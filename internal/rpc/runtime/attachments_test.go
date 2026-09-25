@@ -30,6 +30,7 @@ type attachmentFixture struct {
 	data        []byte
 	asset       media.Asset
 	ingestErr   error
+	openCalls   int
 }
 
 func (f *attachmentFixture) Resolve(_ context.Context, botID, contentHash string) (media.Asset, error) {
@@ -53,6 +54,7 @@ func (f *attachmentFixture) Open(_ context.Context, botID, contentHash string) (
 	if botID != f.botID || contentHash != f.contentHash {
 		return nil, media.Asset{}, media.ErrAssetNotFound
 	}
+	f.openCalls++
 	return io.NopCloser(bytes.NewReader(f.data)), f.asset, nil
 }
 
@@ -69,12 +71,12 @@ func (s *attachmentChunkStream) Send(chunk *runtimepb.AttachmentChunk) error {
 	s.chunks = append(s.chunks, append([]byte(nil), chunk.GetData()...))
 	return nil
 }
-func (s *attachmentChunkStream) SetHeader(metadata.MD) error  { return nil }
-func (s *attachmentChunkStream) SendHeader(metadata.MD) error { return nil }
-func (s *attachmentChunkStream) SetTrailer(metadata.MD)       {}
-func (s *attachmentChunkStream) Context() context.Context     { return s.ctx }
-func (s *attachmentChunkStream) SendMsg(any) error            { return nil }
-func (s *attachmentChunkStream) RecvMsg(any) error            { return nil }
+func (*attachmentChunkStream) SetHeader(metadata.MD) error  { return nil }
+func (*attachmentChunkStream) SendHeader(metadata.MD) error { return nil }
+func (*attachmentChunkStream) SetTrailer(metadata.MD)       {}
+func (s *attachmentChunkStream) Context() context.Context   { return s.ctx }
+func (*attachmentChunkStream) SendMsg(any) error            { return nil }
+func (*attachmentChunkStream) RecvMsg(any) error            { return nil }
 
 func newAttachmentFixture(data []byte) *attachmentFixture {
 	contentHash := strings.Repeat("a", 64)
@@ -99,6 +101,26 @@ func TestResolveAttachmentCalculatesRawMD5ForStoredAndWorkspaceSources(t *testin
 		if got.GetRawMd5() != hex.EncodeToString(wantMD5[:]) || got.GetSizeBytes() != int64(len(fixture.data)) {
 			t.Fatalf("metadata = md5 %q size %d", got.GetRawMd5(), got.GetSizeBytes())
 		}
+	}
+}
+
+func TestResolveAttachmentReusesExistingMetadata(t *testing.T) {
+	fixture := newAttachmentFixture([]byte("payload"))
+	md5sum := md5.Sum(fixture.data) //nolint:gosec
+	fixture.asset.RawMD5 = hex.EncodeToString(md5sum[:])
+	srv := NewServer(nil, nil, fixture)
+
+	got, err := srv.ResolveAttachment(context.Background(), &runtimepb.ResolveAttachmentRequest{
+		BotId: fixture.botID, ContainerPath: fixture.container,
+	})
+	if err != nil {
+		t.Fatalf("ResolveAttachment: %v", err)
+	}
+	if got.GetRawMd5() != fixture.asset.RawMD5 || got.GetSizeBytes() != fixture.asset.SizeBytes {
+		t.Fatalf("metadata = md5 %q size %d, want md5 %q size %d", got.GetRawMd5(), got.GetSizeBytes(), fixture.asset.RawMD5, fixture.asset.SizeBytes)
+	}
+	if fixture.openCalls != 0 {
+		t.Fatalf("opened stored asset %d times, want no extra read when metadata is present", fixture.openCalls)
 	}
 }
 
@@ -183,7 +205,7 @@ func TestReadAttachmentReturnsSendError(t *testing.T) {
 	sendErr := context.Canceled
 	stream := &attachmentChunkStream{ctx: context.Background(), err: sendErr}
 	srv := NewServer(nil, nil, fixture)
-	if err := srv.ReadAttachment(&runtimepb.ReadAttachmentRequest{BotId: fixture.botID, ContentHash: fixture.contentHash}, stream); err != sendErr {
+	if err := srv.ReadAttachment(&runtimepb.ReadAttachmentRequest{BotId: fixture.botID, ContentHash: fixture.contentHash}, stream); !errors.Is(err, sendErr) {
 		t.Fatalf("ReadAttachment error = %v, want %v", err, sendErr)
 	}
 }

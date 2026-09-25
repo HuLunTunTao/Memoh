@@ -61,31 +61,33 @@ func (s *Server) ResolveAttachment(ctx context.Context, req *runtimepb.ResolveAt
 		return nil, status.Error(codes.ResourceExhausted, "attachment exceeds the maximum size")
 	}
 
-	reader, _, err := s.attachments.Open(ctx, botID, asset.ContentHash)
-	if err != nil {
-		return nil, s.attachmentFailure(ctx, "resolve", "open_ingested_asset", sourceKind, botID, 0, err, containerPath, contentHash, asset.ContentHash)
+	if strings.TrimSpace(asset.RawMD5) == "" || asset.SizeBytes <= 0 {
+		reader, _, err := s.attachments.Open(ctx, botID, asset.ContentHash)
+		if err != nil {
+			return nil, s.attachmentFailure(ctx, "resolve", "open_ingested_asset", sourceKind, botID, 0, err, containerPath, contentHash, asset.ContentHash)
+		}
+		md5Hash := md5.New() //nolint:gosec // compatibility digest required by the Weixin upload protocol
+		limited := &io.LimitedReader{R: reader, N: media.MaxAssetBytes + 1}
+		size, copyErr := io.Copy(md5Hash, limited)
+		closeErr := reader.Close()
+		if copyErr != nil {
+			return nil, s.attachmentFailure(ctx, "resolve", "compute_raw_md5", sourceKind, botID, size, copyErr, containerPath, contentHash, asset.ContentHash)
+		}
+		if closeErr != nil {
+			return nil, s.attachmentFailure(ctx, "resolve", "close_ingested_asset", sourceKind, botID, size, closeErr, containerPath, contentHash, asset.ContentHash)
+		}
+		if size == 0 {
+			return nil, status.Error(codes.InvalidArgument, "attachment is empty")
+		}
+		if size > media.MaxAssetBytes {
+			return nil, status.Error(codes.ResourceExhausted, "attachment exceeds the maximum size")
+		}
+		asset.RawMD5 = hex.EncodeToString(md5Hash.Sum(nil))
+		asset.SizeBytes = size
 	}
-	md5Hash := md5.New()
-	limited := &io.LimitedReader{R: reader, N: media.MaxAssetBytes + 1}
-	size, copyErr := io.Copy(md5Hash, limited)
-	closeErr := reader.Close()
-	if copyErr != nil {
-		return nil, s.attachmentFailure(ctx, "resolve", "compute_raw_md5", sourceKind, botID, size, copyErr, containerPath, contentHash, asset.ContentHash)
-	}
-	if closeErr != nil {
-		return nil, s.attachmentFailure(ctx, "resolve", "close_ingested_asset", sourceKind, botID, size, closeErr, containerPath, contentHash, asset.ContentHash)
-	}
-	if size == 0 {
-		return nil, status.Error(codes.InvalidArgument, "attachment is empty")
-	}
-	if size > media.MaxAssetBytes {
-		return nil, status.Error(codes.ResourceExhausted, "attachment exceeds the maximum size")
-	}
-	asset.RawMD5 = hex.EncodeToString(md5Hash.Sum(nil))
-	asset.SizeBytes = size
 	return &runtimepb.ResolveAttachmentResponse{
 		BotId: asset.BotID, ContentHash: asset.ContentHash, Mime: asset.Mime,
-		SizeBytes: size, StorageKey: asset.StorageKey, RawMd5: asset.RawMD5,
+		SizeBytes: asset.SizeBytes, StorageKey: asset.StorageKey, RawMd5: asset.RawMD5,
 	}, nil
 }
 

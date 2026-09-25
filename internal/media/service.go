@@ -357,7 +357,7 @@ func spoolAndHashWithLimit(reader io.Reader, maxBytes int64) (contentHash, rawMD
 	}
 
 	hasher := sha256.New()
-	md5Hasher := md5.New()
+	md5Hasher := md5.New() //nolint:gosec // compatibility digest required by the Weixin upload protocol
 	limited := &io.LimitedReader{R: reader, N: maxBytes + 1}
 	written, copyErr := io.Copy(io.MultiWriter(tmp, hasher, md5Hasher), limited)
 	if copyErr != nil {

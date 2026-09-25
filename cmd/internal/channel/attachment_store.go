@@ -14,14 +14,24 @@ import (
 	runtimeRpc "github.com/felinics/memoh/internal/rpc/runtime"
 )
 
-type attachmentStoreParams struct {
+type localAttachmentStoreParams struct {
+	fx.In
+
+	Local *media.Service
+}
+
+type remoteAttachmentStoreParams struct {
 	fx.In
 
 	Local  *media.Service
-	Remote *runtimeRpc.Client `optional:"true"`
+	Remote *runtimeRpc.Client
 }
 
-func provideChannelAttachmentStore(params attachmentStoreParams) *outboundAttachmentStore {
+func provideLocalChannelAttachmentStore(params localAttachmentStoreParams) *outboundAttachmentStore {
+	return &outboundAttachmentStore{local: params.Local}
+}
+
+func provideRemoteChannelAttachmentStore(params remoteAttachmentStoreParams) *outboundAttachmentStore {
 	return &outboundAttachmentStore{local: params.Local, remote: params.Remote}
 }
 
@@ -92,7 +102,7 @@ func (s *outboundAttachmentStore) IngestContainerFile(ctx context.Context, botID
 }
 
 func (s *outboundAttachmentStore) ensureRawMD5(ctx context.Context, asset media.Asset) (media.Asset, error) {
-	if strings.TrimSpace(asset.RawMD5) != "" {
+	if strings.TrimSpace(asset.RawMD5) != "" && asset.SizeBytes > 0 {
 		return asset, nil
 	}
 	reader, _, err := s.local.Open(ctx, asset.BotID, asset.ContentHash)
@@ -114,5 +124,7 @@ func (s *outboundAttachmentStore) ensureRawMD5(ctx context.Context, asset media.
 	return asset, nil
 }
 
-var _ domainchannel.OutboundAttachmentStore = (*outboundAttachmentStore)(nil)
-var _ domainchannel.ContainerAttachmentIngester = (*outboundAttachmentStore)(nil)
+var (
+	_ domainchannel.OutboundAttachmentStore     = (*outboundAttachmentStore)(nil)
+	_ domainchannel.ContainerAttachmentIngester = (*outboundAttachmentStore)(nil)
+)
