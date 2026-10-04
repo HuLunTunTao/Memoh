@@ -34,7 +34,7 @@ func TestWebhookTunnelAnswersAnUnknownRouteWithAProblemAndOneRecord(t *testing.T
 	var logs bytes.Buffer
 	e := newWebhookTunnelEcho(logger.New(&logs, "debug", "json"))
 	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nowhere", nil))
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/nowhere", nil))
 
 	if rec.Code != http.StatusNotFound || rec.Header().Get("Content-Type") != "application/problem+json" {
 		t.Fatalf("status = %d content-type = %q: %s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())

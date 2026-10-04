@@ -93,6 +93,7 @@ import (
 	"github.com/felinics/memoh/internal/schedule"
 	"github.com/felinics/memoh/internal/searchproviders"
 	"github.com/felinics/memoh/internal/settings"
+	storagepkg "github.com/felinics/memoh/internal/storage"
 	"github.com/felinics/memoh/internal/storage/providers/containerfs"
 	"github.com/felinics/memoh/internal/storage/providers/fallback"
 	"github.com/felinics/memoh/internal/storage/providers/localfs"
@@ -1204,15 +1205,18 @@ func (a *acpRuntimePoolAdapter) CloseAgentRuntime(botID, runtimeID string) error
 	return a.pool.CloseRuntime(botID, runtimeID)
 }
 
-func provideMediaService(log *slog.Logger, provider bridge.Provider, cfg config.Config) *media.Service {
+func provideMediaStorage(provider bridge.Provider, cfg config.Config) storagepkg.Provider {
 	primary := containerfs.New(provider)
 	dataRoot := cfg.Workspace.DataRoot
 	if dataRoot == "" {
 		dataRoot = config.DefaultDataRoot
 	}
 	secondary := localfs.New(filepath.Join(dataRoot, "media"))
-	storageProvider := fallback.New(primary, secondary)
-	return media.NewService(log, storageProvider)
+	return fallback.New(primary, secondary)
+}
+
+func provideMediaService(log *slog.Logger, provider storagepkg.Provider) *media.Service {
+	return media.NewService(log, provider)
 }
 
 func provideAudioRegistry() *audiopkg.Registry {

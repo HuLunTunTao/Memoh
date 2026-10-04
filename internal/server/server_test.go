@@ -22,6 +22,8 @@ func TestShouldSkipJWT_ChannelWebhookPaths(t *testing.T) {
 		path string
 		want bool
 	}{
+		{path: "/ready", want: true},
+		{path: "/ready/private", want: false},
 		{path: "/channels/feishu/webhook/cfg-1", want: true},
 		{path: "/channels/wechatoa/webhook/cfg-1", want: true},
 		{path: "/channels/line/webhook/cfg-1", want: true},

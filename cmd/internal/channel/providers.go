@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	stdpath "path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -65,7 +64,6 @@ import (
 	"github.com/felinics/memoh/internal/searchproviders"
 	"github.com/felinics/memoh/internal/server"
 	"github.com/felinics/memoh/internal/settings"
-	"github.com/felinics/memoh/internal/storage/providers/localfs"
 	"github.com/felinics/memoh/internal/telemetry"
 	"github.com/felinics/memoh/internal/webhooktunnel"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -73,14 +71,6 @@ import (
 
 func providePipeline(log *slog.Logger) *timeline.Pipeline {
 	return timeline.NewPipelineWithOptions(timeline.RenderParams{}, timeline.PipelineOptions{Logger: log})
-}
-
-func provideLocalMediaService(log *slog.Logger, cfg config.Config) *media.Service {
-	dataRoot := cfg.Workspace.DataRoot
-	if strings.TrimSpace(dataRoot) == "" {
-		dataRoot = config.DefaultDataRoot
-	}
-	return media.NewService(log, localfs.New(filepath.Join(dataRoot, "media")))
 }
 
 func provideEventStore(log *slog.Logger, queries dbstore.Queries) *timeline.EventStore {
